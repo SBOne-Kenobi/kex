@@ -124,7 +124,7 @@ class SymbolicTraceBuilder(
      */
     private val cm get() = ctx.cm
     private val converter = Object2DescriptorConverter()
-    private val stateBuilder = arrayListOf<Clause>()
+    val stateBuilder = arrayListOf<Clause>()
     private val traceBuilder = arrayListOf<Instruction>()
     private val pathBuilder = arrayListOf<PathClause>()
     private val concreteValues = mutableMapOf<Term, Descriptor>()
@@ -140,7 +140,7 @@ class SymbolicTraceBuilder(
      */
     private val frames = FrameStack()
 
-    private val nameGenerator = NameGenerator()
+    val nameGenerator = NameGenerator()
     private val currentFrame get() = frames.peek()
     private val currentMethod get() = currentFrame.method
     private val valueMap get() = currentFrame.valueMap
@@ -153,7 +153,7 @@ class SymbolicTraceBuilder(
     /**
      * necessary runtime info
      */
-    private var lastCall: Call? = null
+    var lastCall: Call? = null
     private var thrownException: Term? = null
     private var previousBlock: BasicBlock
         get() = currentFrame.previousBlock
@@ -198,7 +198,7 @@ class SymbolicTraceBuilder(
 
     }
 
-    private class NameGenerator {
+    class NameGenerator {
         private val names = mutableMapOf<String, Int>()
         fun nextName(name: String): String {
             val index = names.getOrPut(name) { 0 }
@@ -207,7 +207,7 @@ class SymbolicTraceBuilder(
         }
     }
 
-    private data class Call(
+    data class Call(
         val call: CallInst,
         val method: Method,
         val receiver: Pair<Value, Term>?,
@@ -1054,8 +1054,10 @@ class SymbolicTraceBuilder(
             val predicate = state(instruction.location) {
                 termReceiver equality termReturn
             }
-            terms[termReceiver] = kfgReceiver.wrapped()
-            concreteValues[termReceiver] = concreteValue.getAsDescriptor(termReceiver.type)
+            if (frames.isNotEmpty()) {
+                terms[termReceiver] = kfgReceiver.wrapped()
+                concreteValues[termReceiver] = concreteValue.getAsDescriptor(termReceiver.type)
+            }
 
             stateBuilder += StateClause(instruction, predicate)
         }
