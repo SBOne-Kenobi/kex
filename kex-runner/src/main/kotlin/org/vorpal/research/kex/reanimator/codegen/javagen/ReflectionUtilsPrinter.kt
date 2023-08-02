@@ -57,8 +57,10 @@ class ReflectionUtilsPrinter(
             import("java.lang.reflect.Array")
             import("java.lang.reflect.Modifier")
             import("sun.misc.Unsafe")
+            import("org.junit.Ignore")
 
             with(klass) {
+                annotations += "Ignore"
                 field("UNSAFE", type("Unsafe")) {
                     visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
                     modifiers += "static"
