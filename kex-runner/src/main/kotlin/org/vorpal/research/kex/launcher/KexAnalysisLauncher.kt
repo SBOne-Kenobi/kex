@@ -28,12 +28,13 @@ import java.nio.file.Paths
 
 class LauncherException(message: String) : KtException(message)
 
-internal fun prepareInstrumentedClasspath(
+fun prepareInstrumentedClasspath(
     containers: List<Container>,
     classLoader: ClassLoader,
     target: Package,
     path: Path,
-    prepareClassPath: (ExecutionContext) -> Pipeline.() -> Unit
+    prepareClassPath: (ExecutionContext) -> Pipeline.() -> Unit,
+    withUnpacking: Boolean = true
 ) {
     val klassPath = containers.map { it.path }
     for (jar in containers) {
@@ -55,7 +56,9 @@ internal fun prepareInstrumentedClasspath(
             klassPath
         )
 
-        jar.unpack(cm, path, true)
+        if (withUnpacking) {
+            jar.unpack(cm, path, true)
+        }
 
         executePipeline(cm, target) {
             +ClassInstantiationDetector(context)
