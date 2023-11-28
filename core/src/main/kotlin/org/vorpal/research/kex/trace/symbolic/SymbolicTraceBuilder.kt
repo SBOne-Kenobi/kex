@@ -68,6 +68,9 @@ class SymbolicTraceBuilder(
             )
         }
 
+    val trace: List<Instruction>
+        get() = traceBuilder.toList()
+
     /**
      * mutable backing fields for required fields
      */
