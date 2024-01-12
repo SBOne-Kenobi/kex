@@ -3,6 +3,7 @@ package org.vorpal.research.kex.asm.analysis.concolic.cgs
 import kotlinx.coroutines.yield
 import org.vorpal.research.kex.ExecutionContext
 import org.vorpal.research.kex.asm.analysis.concolic.ConcolicPathSelector
+import org.vorpal.research.kex.asm.analysis.concolic.ConcolicPathSelectorManager
 import org.vorpal.research.kex.asm.manager.NoConcreteInstanceException
 import org.vorpal.research.kex.asm.manager.instantiationManager
 import org.vorpal.research.kex.ktype.kexType
@@ -37,8 +38,18 @@ import org.vorpal.research.kthelper.collection.dequeOf
 import org.vorpal.research.kthelper.logging.log
 import org.vorpal.research.kthelper.`try`
 
+
+class ContextGuidedSelectorManager(
+    override val ctx: ExecutionContext,
+    override val targets: Set<Method>
+) : ConcolicPathSelectorManager {
+    override fun createPathSelectorFor(target: Method): ConcolicPathSelector =
+        ContextGuidedSelector(ctx, target)
+}
+
 class ContextGuidedSelector(
     override val ctx: ExecutionContext,
+    val method: Method
 ) : ConcolicPathSelector {
     private val executionTree = ExecutionTree(ctx)
     private var currentDepth = 0
@@ -64,7 +75,8 @@ class ContextGuidedSelector(
             val next = nextEdge() ?: continue
             if (executionTree.isExhausted(next)) continue
 
-            val contexts = executionTree.contexts(next, k).filter { it !in visitedContexts }
+            val nonFilteredContexts = executionTree.contexts(next, k)
+            val contexts = nonFilteredContexts.filter { it !in visitedContexts }
             for (context in contexts) {
                 val path = context.fullPath.removeAt(context.fullPath.lastIndex)
                 val activeClause = context.fullPath.lastOrNull() ?: continue
@@ -76,18 +88,19 @@ class ContextGuidedSelector(
         false
     }.getOrElse { false }
 
-    override suspend fun next(): PersistentSymbolicState {
+    override suspend fun next(): Pair<Method, PersistentSymbolicState> {
         val currentState = states.pollFirst()!!
         visitedContexts += currentState.context
 
         val currentStateState = currentState.context.symbolicState
         val stateSize = currentStateState.clauses.indexOf(currentState.activeClause)
-        val state = currentStateState.clauses.subState(0, stateSize)
+        val state = currentStateState.clauses.subState(stateSize)
 
-        return persistentSymbolicState(
+        return method to persistentSymbolicState(
             state,
             currentState.path + currentState.revertedClause,
-            currentStateState.concreteValueMap,
+            currentStateState.concreteTypes,
+            currentStateState.concreteValues,
             currentStateState.termMap
         )
     }
@@ -113,8 +126,12 @@ class ContextGuidedSelector(
         branchIterator = executionTree.getBranches(currentDepth).shuffled(ctx.random).iterator()
     }
 
-    override suspend fun addExecutionTrace(method: Method, result: ExecutionCompletedResult) {
-        executionTree.addTrace(result.trace.toPersistentState())
+    override suspend fun addExecutionTrace(
+        method: Method,
+        checkedState: PersistentSymbolicState,
+        result: ExecutionCompletedResult
+    ) {
+        executionTree.addTrace(result.symbolicState.toPersistentState())
     }
 
     override fun reverse(pathClause: PathClause): PathClause? = pathClause.reversed()

@@ -1,34 +1,36 @@
 package org.vorpal.research.kex.worker
 
+import kotlinx.coroutines.runBlocking
 import org.vorpal.research.kex.ExecutionContext
-import org.vorpal.research.kex.config.kexConfig
 import org.vorpal.research.kex.trace.symbolic.protocol.ExecutionFailedResult
 import org.vorpal.research.kex.trace.symbolic.protocol.Worker2MasterConnection
+import org.vorpal.research.kex.util.newFixedThreadPoolContextWithMDC
 import org.vorpal.research.kthelper.assert.ktassert
 import org.vorpal.research.kthelper.logging.log
-import kotlin.time.Duration.Companion.seconds
 
 class ExecutorWorker(
     val ctx: ExecutionContext,
     private val connection: Worker2MasterConnection
-) : Runnable {
+) : Runnable, AutoCloseable {
     val executor: TestExecutor = TestExecutor(ctx)
-    private val timeout = kexConfig.getIntValue("runner", "timeout", 100).seconds
 
-    init {
-        ktassert(connection.connect(timeout))
-    }
-
-    override fun run() {
+    override fun run() = runBlocking(newFixedThreadPoolContextWithMDC(1, "worker")) {
+        ktassert(connection.connect())
         while (true) {
-            val request = connection.receive()
+            val request = connection.receive() ?: return@runBlocking
             val result = try {
                 executor.executeTest(request)
             } catch (e: Throwable) {
-                log.error("Failed: $e")
+                log.error("Failed:", e)
                 ExecutionFailedResult(e.message ?: "")
             }
-            connection.send(result)
+            if (!connection.send(result)) {
+                return@runBlocking
+            }
         }
+    }
+
+    override fun close() {
+        connection.close()
     }
 }

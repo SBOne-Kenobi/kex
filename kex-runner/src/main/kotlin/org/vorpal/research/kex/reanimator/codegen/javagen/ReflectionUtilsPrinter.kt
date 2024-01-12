@@ -1,7 +1,9 @@
 package org.vorpal.research.kex.reanimator.codegen.javagen
 
+import org.vorpal.research.kex.asm.util.Visibility
 import org.vorpal.research.kex.config.kexConfig
 import org.vorpal.research.kex.util.asmString
+import org.vorpal.research.kex.util.getJvmVersion
 import org.vorpal.research.kex.util.kapitalize
 import org.vorpal.research.kex.util.testcaseDirectory
 import java.nio.file.Path
@@ -23,6 +25,7 @@ class ReflectionUtilsPrinter(
     val setPrimitiveElementMap = mutableMapOf<String, JavaBuilder.JavaFunction>()
     val callConstructor: JavaBuilder.JavaFunction
     val callMethod: JavaBuilder.JavaFunction
+    val getModifiersField: JavaBuilder.JavaFunction
 
     companion object {
         const val REFLECTION_UTILS_CLASS = "ReflectionUtils"
@@ -62,7 +65,7 @@ class ReflectionUtilsPrinter(
             with(klass) {
                 annotations += "Ignore"
                 field("UNSAFE", type("Unsafe")) {
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     modifiers += "final"
                 }
@@ -78,10 +81,35 @@ class ReflectionUtilsPrinter(
                     }
                 }
 
+                getModifiersField = method("getModifiersField") {
+                    returnType = type("Field")
+                    visibility = Visibility.PUBLIC
+                    modifiers += "static"
+                    exceptions += "Throwable"
+
+                    when {
+                        getJvmVersion() >= 12 -> {
+                            +"Field mods = null"
+                            +"Method m = Class.class.getDeclaredMethod(\"getDeclaredFields0\", boolean.class)"
+                            +"m.setAccessible(true)"
+                            +"for (Field f : (Field[]) m.invoke(Field.class, false)) {"
+                            +"    if (f.getName().equals(\"modifiers\")) {"
+                            +"        mods = f"
+                            +"        break"
+                            +"    }"
+                            +"}"
+                            +"return mods"
+                        }
+                        else -> {
+                            +"return Field.class.getDeclaredField(\"modifiers\")"
+                        }
+                    }
+                }
+
                 method("newInstance") {
                     arguments += arg("klass", type("Class<?>"))
                     returnType = type("Object")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -93,7 +121,7 @@ class ReflectionUtilsPrinter(
                 newInstance = method("newInstance") {
                     arguments += arg("klass", type("String"))
                     returnType = type("Object")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -105,7 +133,7 @@ class ReflectionUtilsPrinter(
                     arguments += arg("elementType", type("String"))
                     arguments += arg("length", type("int"))
                     returnType = type("Object")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -117,7 +145,7 @@ class ReflectionUtilsPrinter(
                     arguments += arg("elementType", type("Class<?>"))
                     arguments += arg("length", type("int"))
                     returnType = type("Object")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -128,7 +156,7 @@ class ReflectionUtilsPrinter(
                     newPrimitiveArrayMap[type] = method("new${type.kapitalize()}Array") {
                         arguments += arg("length", type("int"))
                         returnType = type("Object")
-                        visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                        visibility = Visibility.PUBLIC
                         modifiers += "static"
                         exceptions += "Throwable"
 
@@ -140,7 +168,7 @@ class ReflectionUtilsPrinter(
                     arguments += arg("klass", type("Class<?>"))
                     arguments += arg("name", type("String"))
                     returnType = type("Field")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -153,7 +181,7 @@ class ReflectionUtilsPrinter(
                             exceptions += type("Throwable")
                         }
                         +"current = current.getSuperclass()"
-                    }.aWhile("current != null")
+                    }.aWhile("current != null && result == null")
                     anIf("result == null") {
                         +"throw new NoSuchFieldException()"
                     }
@@ -166,12 +194,12 @@ class ReflectionUtilsPrinter(
                     arguments += arg("name", type("String"))
                     arguments += arg("value", type("Object"))
                     returnType = void
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
                     +"Field field = ${getField.name}(klass, name)"
-                    +"Field mods = Field.class.getDeclaredField(\"modifiers\")"
+                    +"Field mods = ${getModifiersField.name}()"
                     +"mods.setAccessible(true)"
                     +"int modifiers = mods.getInt(field)"
                     +"mods.setInt(field, modifiers & ~Modifier.FINAL)"
@@ -186,12 +214,12 @@ class ReflectionUtilsPrinter(
                         arguments += arg("name", type("String"))
                         arguments += arg("value", type(type))
                         returnType = void
-                        visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                        visibility = Visibility.PUBLIC
                         modifiers += "static"
                         exceptions += "Throwable"
 
                         +"Field field = ${getField.name}(klass, name)"
-                        +"Field mods = Field.class.getDeclaredField(\"modifiers\")"
+                        +"Field mods = ${getModifiersField.name}()"
                         +"mods.setAccessible(true)"
                         +"int modifiers = mods.getInt(field)"
                         +"mods.setInt(field, modifiers & ~Modifier.FINAL)"
@@ -205,7 +233,7 @@ class ReflectionUtilsPrinter(
                     arguments += arg("index", type("int"))
                     arguments += arg("element", type("Object"))
                     returnType = void
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -217,7 +245,7 @@ class ReflectionUtilsPrinter(
                         arguments += arg("index", type("int"))
                         arguments += arg("element", type(type))
                         returnType = void
-                        visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                        visibility = Visibility.PUBLIC
                         modifiers += "static"
                         exceptions += "Throwable"
 
@@ -230,7 +258,7 @@ class ReflectionUtilsPrinter(
                     arguments += arg("argTypes", type("Class<?>[]"))
                     arguments += arg("args", type("Object[]"))
                     returnType = type("Object")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 
@@ -246,7 +274,7 @@ class ReflectionUtilsPrinter(
                     arguments += arg("instance", type("Object"))
                     arguments += arg("args", type("Object[]"))
                     returnType = type("Object")
-                    visibility = org.vorpal.research.kex.asm.util.Visibility.PUBLIC
+                    visibility = Visibility.PUBLIC
                     modifiers += "static"
                     exceptions += "Throwable"
 

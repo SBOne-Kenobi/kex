@@ -19,6 +19,7 @@ import org.vorpal.research.kex.launcher.AnalysisLevel
 import org.vorpal.research.kex.launcher.ClassLevel
 import org.vorpal.research.kex.launcher.MethodLevel
 import org.vorpal.research.kex.launcher.PackageLevel
+import org.vorpal.research.kex.util.PathClassLoader
 import org.vorpal.research.kex.util.PermanentCoverageInfo
 import org.vorpal.research.kex.util.PermanentSaturationCoverageInfo
 import org.vorpal.research.kex.util.asArray
@@ -39,7 +40,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.*
-import kotlin.io.path.exists
 import kotlin.io.path.inputStream
 import kotlin.io.path.name
 import kotlin.io.path.readBytes
@@ -49,172 +49,6 @@ import kotlin.streams.toList
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
-
-interface CoverageInfo {
-    val covered: Int
-    val total: Int
-    val ratio: Double
-}
-
-enum class CoverageUnit(unit: String) {
-    INSTRUCTION("instructions"),
-    BRANCH("branches"),
-    LINE("lines"),
-    COMPLEXITY("complexity");
-
-    companion object {
-        fun parse(unit: String) = when (unit) {
-            INSTRUCTION.unitName -> INSTRUCTION
-            BRANCH.unitName -> BRANCH
-            LINE.unitName -> LINE
-            COMPLEXITY.unitName -> COMPLEXITY
-            else -> unreachable { log.error("Unknown coverage unit $unit") }
-        }
-    }
-
-    val unitName: String = unit
-
-    override fun toString(): String {
-        return unitName
-    }
-}
-
-enum class AnalysisUnit(unit: String) {
-    METHOD("method"),
-    CLASS("class"),
-    PACKAGE("package");
-
-    companion object {
-        fun parse(unit: String) = when (unit) {
-            METHOD.unitName -> METHOD
-            CLASS.unitName -> CLASS
-            PACKAGE.unitName -> PACKAGE
-            else -> unreachable { log.error("Unknown analysis unit $unit") }
-        }
-    }
-
-    val unitName: String = unit
-
-    override fun toString(): String {
-        return unitName
-    }
-}
-
-data class GenericCoverageInfo(
-    override val covered: Int,
-    override val total: Int,
-    val unit: CoverageUnit
-) : CoverageInfo {
-    override val ratio: Double get() = when (total) {
-        0 -> 0.0
-        else -> covered.toDouble() / total
-    }
-    override fun toString(): String = buildString {
-        append(String.format("%s of %s %s covered", covered, total, unit))
-        if (total > 0) {
-            append(String.format(" = %.2f", ratio * 100))
-            append("%")
-        }
-    }
-}
-
-abstract class CommonCoverageInfo(
-    val name: String,
-    val level: AnalysisUnit,
-    val instructionCoverage: CoverageInfo,
-    val branchCoverage: CoverageInfo,
-    val linesCoverage: CoverageInfo,
-    val complexityCoverage: CoverageInfo
-) {
-    open fun print(detailed: Boolean = false) = toString()
-
-    override fun toString(): String = buildString {
-        appendLine(String.format("Coverage of `%s` %s:", name, level))
-        appendLine("    $instructionCoverage")
-        appendLine("    $branchCoverage")
-        appendLine("    $linesCoverage")
-        append("    $complexityCoverage")
-    }
-
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is CommonCoverageInfo) return false
-
-        return name == other.name
-    }
-
-    override fun hashCode(): Int {
-        return name.hashCode()
-    }
-}
-
-class MethodCoverageInfo(
-    name: String,
-    instructionCoverage: CoverageInfo,
-    branchCoverage: CoverageInfo,
-    linesCoverage: CoverageInfo,
-    complexityCoverage: CoverageInfo
-) : CommonCoverageInfo(
-    name,
-    AnalysisUnit.METHOD,
-    instructionCoverage,
-    branchCoverage,
-    linesCoverage,
-    complexityCoverage
-)
-
-class ClassCoverageInfo(
-    name: String,
-    instructionCoverage: CoverageInfo,
-    branchCoverage: CoverageInfo,
-    linesCoverage: CoverageInfo,
-    complexityCoverage: CoverageInfo,
-) : CommonCoverageInfo(
-    name,
-    AnalysisUnit.CLASS,
-    instructionCoverage,
-    branchCoverage,
-    linesCoverage,
-    complexityCoverage
-) {
-    val methods = mutableSetOf<MethodCoverageInfo>()
-
-    override fun print(detailed: Boolean) = buildString {
-        appendLine(this@ClassCoverageInfo.toString())
-        if (detailed) {
-            methods.forEach {
-                appendLine()
-                appendLine(it.print(true))
-            }
-        }
-    }
-}
-
-class PackageCoverageInfo(
-    name: String,
-    instructionCoverage: CoverageInfo,
-    branchCoverage: CoverageInfo,
-    linesCoverage: CoverageInfo,
-    complexityCoverage: CoverageInfo
-) : CommonCoverageInfo(
-    name,
-    AnalysisUnit.PACKAGE,
-    instructionCoverage,
-    branchCoverage,
-    linesCoverage,
-    complexityCoverage
-) {
-    val classes = mutableSetOf<ClassCoverageInfo>()
-
-    override fun print(detailed: Boolean) = buildString {
-        if (detailed) {
-            classes.forEach {
-                appendLine(it.print(true))
-            }
-        }
-        appendLine(this@PackageCoverageInfo.toString())
-    }
-}
 
 class CoverageReporter(
     containers: List<Container> = listOf()
@@ -487,30 +321,14 @@ class CoverageReporter(
             else -> unreachable { log.error("Unknown common coverage info class ${T::class.java}") }
         } as T
     }
-
-    class PathClassLoader(val paths: List<Path>) : ClassLoader() {
-        private val cache = hashMapOf<String, Class<*>>()
-        override fun loadClass(name: String): Class<*> {
-            synchronized(this.getClassLoadingLock(name)) {
-                if (name in cache) return cache[name]!!
-
-                val fileName = name.replace(Package.CANONICAL_SEPARATOR, File.separatorChar) + ".class"
-                for (path in paths) {
-                    val resolved = path.resolve(fileName)
-                    if (resolved.exists()) {
-                        val bytes = resolved.readBytes()
-                        val klass = defineClass(name, bytes, 0, bytes.size)
-                        cache[name] = klass
-                        return klass
-                    }
-                }
-            }
-            return parent?.loadClass(name) ?: throw ClassNotFoundException()
-        }
-    }
 }
 
-fun reportCoverage(containers: List<Container>, cm: ClassManager, analysisLevel: AnalysisLevel) {
+fun reportCoverage(
+    containers: List<Container>,
+    cm: ClassManager,
+    analysisLevel: AnalysisLevel,
+    mode: String
+) {
     if (kexConfig.getBooleanValue("kex", "computeCoverage", true)) {
         val coverageInfo = when {
             kexConfig.getBooleanValue("kex", "computeSaturationCoverage", true) -> {
@@ -532,7 +350,7 @@ fun reportCoverage(containers: List<Container>, cm: ClassManager, analysisLevel:
             coverageInfo.print(kexConfig.getBooleanValue("kex", "printDetailedCoverage", false))
         )
 
-        PermanentCoverageInfo.putNewInfo("concolic", analysisLevel.toString(), coverageInfo)
+        PermanentCoverageInfo.putNewInfo(mode, analysisLevel.toString(), coverageInfo)
         PermanentCoverageInfo.emit()
     }
 }

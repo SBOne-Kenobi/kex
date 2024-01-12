@@ -156,7 +156,7 @@ class KSMTSolver(
         val result = check(ksmtState, queryBuilder(ksmtQuery))
         log.debug("Check finished")
         when (result.first) {
-            KSolverStatus.UNSAT -> Result.UnsatResult
+            KSolverStatus.UNSAT -> Result.UnsatResult()
             KSolverStatus.UNKNOWN -> Result.UnknownResult(result.second as String)
             KSolverStatus.SAT -> Result.SatResult(collectModel(ctx, result.second as KModel, state))
         }
@@ -239,20 +239,21 @@ class KSMTSolver(
         else -> state
     }
 
-    private fun stringify(state: Bool_, query: Bool_, softConstraints: List<Bool_> = emptyList()): String = KZ3Solver(ef.ctx).use {
-        it.assert(state.asAxiom() as KExpr<KBoolSort>)
-        it.assert(ef.buildConstClassAxioms().asAxiom() as KExpr<KBoolSort>)
-        it.assert(query.axiom as KExpr<KBoolSort>)
-        it.assert(query.expr as KExpr<KBoolSort>)
-        for (softConstraint in softConstraints) {
-            it.assert(softConstraint.asAxiom() as KExpr<KBoolSort>)
-        }
+    private fun stringify(state: Bool_, query: Bool_, softConstraints: List<Bool_> = emptyList()): String =
+        KZ3Solver(ef.ctx).use {
+            it.assert(state.asAxiom() as KExpr<KBoolSort>)
+            it.assert(ef.buildConstClassAxioms().asAxiom() as KExpr<KBoolSort>)
+            it.assert(query.axiom as KExpr<KBoolSort>)
+            it.assert(query.expr as KExpr<KBoolSort>)
+            for (softConstraint in softConstraints) {
+                it.assert(softConstraint.asAxiom() as KExpr<KBoolSort>)
+            }
 
-        val solverProp = KZ3Solver::class.declaredMemberProperties.first { prop -> prop.name == "solver" }
-        solverProp.isAccessible = true
-        val z3SolverInternal = solverProp.get(it) as com.microsoft.z3.Solver
-        z3SolverInternal.toString()
-    }
+            val solverProp = KZ3Solver::class.declaredMemberProperties.first { prop -> prop.name == "solver" }
+            solverProp.isAccessible = true
+            val z3SolverInternal = solverProp.get(it) as com.microsoft.z3.Solver
+            z3SolverInternal.toString()
+        }
 
     private suspend fun check(state: Bool_, query: Bool_): Pair<KSolverStatus, Any> = runSolver { solver ->
         if (logFormulae) {
@@ -431,6 +432,7 @@ class KSMTSolver(
         }
 
         val indices = hashSetOf<Term>()
+        val coveredArrays = hashSetOf<Term>()
         for (ptr in ptrs) {
             val memspace = ptr.memspace
 
@@ -550,10 +552,13 @@ class KSMTSolver(
                         val maxLen = maxOf(initialLength, finalLength)
                         properties[memspace]!!["length"]!!.first[modelPtr] = term { const(initialLength) }
                         properties[memspace]!!["length"]!!.second[modelPtr] = term { const(finalLength) }
-                        for (i in 0 until maxLen) {
-                            val indexTerm = term { ptr[i] }
-                            if (indexTerm !in ptrs)
-                                indices += indexTerm
+                        if (modelPtr !in coveredArrays) {
+                            coveredArrays += modelPtr
+                            for (i in 0 until maxLen) {
+                                val indexTerm = term { ptr[i] }
+                                if (indexTerm !in ptrs)
+                                    indices += indexTerm
+                            }
                         }
                     } else if (ptr is ConstClassTerm || ptr is ClassAccessTerm) {
                         properties.recoverBitvectorProperty(
@@ -673,7 +678,7 @@ class KSMTSolver(
         log.debug("Check finished")
         results.mapIndexed { index, (status, any, ctx) ->
             when (status) {
-                KSolverStatus.UNSAT -> Result.UnsatResult
+                KSolverStatus.UNSAT -> Result.UnsatResult()
                 KSolverStatus.UNKNOWN -> Result.UnknownResult(any as String)
                 KSolverStatus.SAT -> Result.SatResult(
                     collectModel(

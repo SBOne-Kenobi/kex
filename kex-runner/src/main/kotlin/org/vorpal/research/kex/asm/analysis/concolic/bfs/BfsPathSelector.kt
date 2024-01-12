@@ -2,6 +2,7 @@ package org.vorpal.research.kex.asm.analysis.concolic.bfs
 
 import org.vorpal.research.kex.ExecutionContext
 import org.vorpal.research.kex.asm.analysis.concolic.ConcolicPathSelector
+import org.vorpal.research.kex.asm.analysis.concolic.ConcolicPathSelectorManager
 import org.vorpal.research.kex.state.predicate.DefaultSwitchPredicate
 import org.vorpal.research.kex.state.predicate.EqualityPredicate
 import org.vorpal.research.kex.state.predicate.InequalityPredicate
@@ -14,8 +15,8 @@ import org.vorpal.research.kex.trace.symbolic.PersistentClauseList
 import org.vorpal.research.kex.trace.symbolic.PersistentPathCondition
 import org.vorpal.research.kex.trace.symbolic.PersistentSymbolicState
 import org.vorpal.research.kex.trace.symbolic.persistentSymbolicState
-import org.vorpal.research.kex.trace.symbolic.toPersistentState
 import org.vorpal.research.kex.trace.symbolic.protocol.ExecutionCompletedResult
+import org.vorpal.research.kex.trace.symbolic.toPersistentState
 import org.vorpal.research.kfg.ir.Method
 import org.vorpal.research.kfg.ir.value.IntConstant
 import org.vorpal.research.kfg.ir.value.instruction.BranchInst
@@ -25,9 +26,17 @@ import org.vorpal.research.kthelper.assert.unreachable
 import org.vorpal.research.kthelper.collection.dequeOf
 import org.vorpal.research.kthelper.logging.log
 
+class BfsPathSelectorManager(
+    override val ctx: ExecutionContext,
+    override val targets: Set<Method>
+) : ConcolicPathSelectorManager {
+    override fun createPathSelectorFor(target: Method): ConcolicPathSelector =
+        BfsPathSelectorImpl(ctx, target)
+}
 
 class BfsPathSelectorImpl(
     override val ctx: ExecutionContext,
+    val method: Method
 ) : ConcolicPathSelector {
     private val coveredPaths = mutableSetOf<PersistentPathCondition>()
     private val candidates = mutableSetOf<PersistentPathCondition>()
@@ -36,14 +45,18 @@ class BfsPathSelectorImpl(
     override suspend fun isEmpty(): Boolean = deque.isEmpty()
     override suspend fun hasNext(): Boolean = deque.isNotEmpty()
 
-    override suspend fun addExecutionTrace(method: Method, result: ExecutionCompletedResult) {
-        val persistentResult = result.trace.toPersistentState()
+    override suspend fun addExecutionTrace(
+        method: Method,
+        checkedState: PersistentSymbolicState,
+        result: ExecutionCompletedResult
+    ) {
+        val persistentResult = result.symbolicState.toPersistentState()
         if (persistentResult.path in coveredPaths) return
         coveredPaths += persistentResult.path
         addCandidates(persistentResult)
     }
 
-    override suspend fun next(): PersistentSymbolicState = deque.pollFirst()
+    override suspend fun next(): Pair<Method, PersistentSymbolicState> = method to deque.pollFirst()
 
     override fun reverse(pathClause: PathClause): PathClause? = pathClause.reversed()
 
@@ -61,7 +74,8 @@ class BfsPathSelectorImpl(
                         val new = persistentSymbolicState(
                             currentState + reversed,
                             newPath,
-                            state.concreteValueMap,
+                            state.concreteTypes,
+                            state.concreteValues,
                             state.termMap
                         )
                         deque += new
@@ -84,6 +98,7 @@ class BfsPathSelectorImpl(
             if (coveredPaths.any { reversed in it }) null
             else reversed
         }
+
         is SwitchInst -> when (predicate) {
             is DefaultSwitchPredicate -> {
                 val defaultSwitch = predicate as DefaultSwitchPredicate
@@ -99,6 +114,7 @@ class BfsPathSelectorImpl(
                 }
                 result
             }
+
             is EqualityPredicate -> {
                 val equalityPredicate = predicate as EqualityPredicate
                 val switchInst = instruction as SwitchInst
@@ -119,8 +135,10 @@ class BfsPathSelectorImpl(
                     if (coveredPaths.any { mutated in it }) mutated else null
                 }
             }
+
             else -> unreachable { log.error("Unexpected predicate in switch clause: $predicate") }
         }
+
         is TableSwitchInst -> when (predicate) {
             is DefaultSwitchPredicate -> {
                 val defaultSwitch = predicate as DefaultSwitchPredicate
@@ -136,6 +154,7 @@ class BfsPathSelectorImpl(
                 }
                 result
             }
+
             is EqualityPredicate -> {
                 val equalityPredicate = predicate as EqualityPredicate
                 val switchInst = instruction as TableSwitchInst
@@ -156,8 +175,10 @@ class BfsPathSelectorImpl(
                     if (coveredPaths.any { mutated in it }) null else mutated
                 }
             }
+
             else -> unreachable { log.error("Unexpected predicate in switch clause: $predicate") }
         }
+
         else -> when (val pred = predicate) {
             is EqualityPredicate -> {
                 val (lhv, rhv) = pred.lhv to pred.rhv
@@ -165,21 +186,26 @@ class BfsPathSelectorImpl(
                     is NullTerm -> copy(predicate = path(instruction.location) {
                         lhv inequality null
                     })
+
                     is ConstBoolTerm -> copy(predicate = path(instruction.location) {
                         lhv equality !rhv.value
                     })
+
                     else -> log.warn("Unknown clause $this").let { null }
                 }
             }
+
             is InequalityPredicate -> {
                 val (lhv, rhv) = pred.lhv to pred.rhv
                 when (rhv) {
                     is NullTerm -> copy(predicate = path(instruction.location) {
                         lhv equality null
                     })
+
                     else -> log.warn("Unknown clause $this").let { null }
                 }
             }
+
             else -> null
         }
     }

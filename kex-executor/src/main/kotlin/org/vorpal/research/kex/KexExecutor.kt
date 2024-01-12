@@ -12,6 +12,7 @@ import org.vorpal.research.kex.serialization.KexSerializer
 import org.vorpal.research.kex.trace.symbolic.TraceCollectorProxy
 import org.vorpal.research.kex.trace.symbolic.protocol.ExceptionResult
 import org.vorpal.research.kex.trace.symbolic.protocol.SuccessResult
+import org.vorpal.research.kex.util.PathClassLoader
 import org.vorpal.research.kex.util.getIntrinsics
 import org.vorpal.research.kex.util.getPathSeparator
 import org.vorpal.research.kex.util.getRuntime
@@ -23,8 +24,6 @@ import org.vorpal.research.kfg.ir.value.NameMapperContext
 import org.vorpal.research.kfg.util.Flags
 import org.vorpal.research.kthelper.logging.error
 import org.vorpal.research.kthelper.logging.log
-import ru.spbstu.wheels.mapToArray
-import java.net.URLClassLoader
 import java.nio.file.Paths
 import kotlin.system.exitProcess
 
@@ -45,7 +44,7 @@ class KexExecutor(args: Array<String>) {
     private val output = cmd.getCmdValue("output")!!.let { Paths.get(it) }
 
     private val containers: List<Container>
-    private val containerClassLoader: URLClassLoader
+    private val containerClassLoader: PathClassLoader
     private val classManager: ClassManager
 
     init {
@@ -56,7 +55,7 @@ class KexExecutor(args: Array<String>) {
         val classPaths = cmd.getCmdValue("classpath")!!
             .split(getPathSeparator())
             .map { Paths.get(it).toAbsolutePath() }
-        containerClassLoader = URLClassLoader(classPaths.mapToArray { it.toUri().toURL() })
+        containerClassLoader = PathClassLoader(classPaths)
 
         containers = classPaths.map {
             it.asContainer() ?: run {
@@ -65,7 +64,13 @@ class KexExecutor(args: Array<String>) {
             }
         }
         classManager = ClassManager(KfgConfig(flags = Flags.readAll, failOnError = false, verifyIR = false))
-        classManager.initialize(*listOfNotNull(*containers.toTypedArray(), getRuntime(), getIntrinsics()).toTypedArray())
+        classManager.initialize(
+            *listOfNotNull(
+                *containers.toTypedArray(),
+                getRuntime(),
+                getIntrinsics()
+            ).toTypedArray()
+        )
     }
 
     @ExperimentalSerializationApi
@@ -106,8 +111,13 @@ class KexExecutor(args: Array<String>) {
             TraceCollectorProxy.disableCollector()
             log.debug("Collected state: {}", collector.symbolicState)
             val result = when {
-                exception != null -> ExceptionResult(convertToDescriptor(exception), collector.symbolicState)
-                else -> SuccessResult(collector.symbolicState)
+                exception != null -> ExceptionResult(
+                    convertToDescriptor(exception),
+                    collector.instructionTrace,
+                    collector.symbolicState
+                )
+
+                else -> SuccessResult(collector.instructionTrace, collector.symbolicState)
             }
             val jsonString = serializer.toJson(result)
             output.toFile().writeText(jsonString)
